@@ -1,0 +1,614 @@
+---
+title: "TF-IDF & Weighted Log Odds to Analyze Research Abstracts"
+author: "Julie Nguyen"
+output:
+  html_document:
+    theme: flatly
+    code_folding: show
+    toc: true
+    toc_depth: 4
+    toc_float:
+      collapsed: T
+    number_sections: no
+    fig_caption: yes
+    df_print: kable
+subparagraph: yes
+---
+
+<script>
+$(document).ready(function() {
+  $items = $('div#TOC li');
+  $items.each(function(idx) {
+    num_ul = $(this).parentsUntil('#TOC').length;
+    $(this).css({'text-indent': num_ul * 10, 'padding-left': 0});
+  });
+
+});
+</script>
+
+<style type="text/css">
+  body{
+  font-size: 12pt;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+library(knitr) # publish this document
+library(silgelib) # visualize data
+library(ggplot2) # visualize data
+library(dplyr) # manipulate data
+library(tidyr) # manipulate data
+library(kableExtra) # create pretty table
+library(stringr) # manipulate text data
+library(tidytext) # manipulate text data
+
+opts_chunk$set(
+  tidy = F, 
+  echo = T, 
+  cache = T, 
+  message = F, 
+  warning = F)
+
+options(knitr.kable.NA = '',
+        width=120, 
+        dplyr.width = 150) 
+
+theme_set(theme_plex())
+```
+
+Welcome to my journey as I prepare for my PhD comprehensive exam! In this notebook, I analyze over a hundred research papers that explore two critical questions: how new ideas gain acceptance and how social networks influence the careers of men and women differently. These research streams, which I refer to as "Novelty Reception" and "Network and Gender", form the bedrock of my work into the systemic barriers women face in creative fields.
+
+Since starting my PhD in 2019, I've used text analysis to help me with various aspects of my research, including gearing up for my comprehensive exams. This notebook documents that journey.
+
+We start by extacting detailed metadata for each paper from their academic citations. Then, we delve into the textual content of the abstracts, using NLP tools like TF-IDF and weighted log odds to unearth key terms and phrases unique to each research stream. We also create visualizations to further clarify the thematic trends we uncover. 
+
+Join me on this adventure as we transform raw academic text into a comprehensive exploration of thematic trends in the research on the forces shaping acceptance of new ideas and the gendered effects of social networks.
+
+
+# Generating metadata from citations
+
+I've set up a Google Sheets document that contains all the papers I plan to explore. Let's pull this data from Google Sheets and see what we've got.
+
+
+```{r}
+# Importing a Google Sheets document containing the paper citations and abstracts
+gsheet::gsheet2tbl('https://docs.google.com/spreadsheets/d/1ic1Zc3CpXZyiYfD5whrHLizMN83WXyxjipN5moUtVG8/edit#gid=0') -> reading
+
+# Sample 10 random rows to preview the data structure 
+reading %>% 
+  sample_n(10) %>% 
+  # format the table for better visualization in HTML
+  kbl(caption = "Sample of Reading List in Chronological Order") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), fixed_thead = TRUE) %>%
+  scroll_box(width = "100%", height = "700px")
+```
+
+
+This sample gives us a quick snapshot of our data: each paper's citation, abstract, and its assigned research stream—either 'Novelty reception' or 'Network and gender'. Next, we're going to add layers of detail to our dataset. We'll extract and create metadata such as publication year, author names, and more, thus setting the stage for deeper analysis.
+
+
+```{r}
+# extract and create useful metadata for each paper
+reading %>% 
+  rename(research_stream = Topic) %>% 
+  mutate(
+  # create id for each paper based on the row number
+  id = row_number(),
+  
+  # create publication year by extracting 4-letter words from citation that starts with 2 then 0 (i.e., articles published in the 21st century) or with 1 then 9 (i.e., articles published in the 20th century)
+  year = str_extract_all(Citation, "[2][0][0-9]{2}|[1][9][0-9]{2}", simplify = T)[,1] %>% as.numeric(), 
+  
+  # create decade based on year
+  decade = (year %/% 10) * 10, 
+  decade = paste0(decade, "s"),
+  
+  # create authors by extracting all characters from citation that appear before the closing bracket )
+  authors = str_replace(Citation, "\\).*$", ""), 
+  # remove the begining bracket ( from the above extracted text 
+  authors = str_replace(authors, "\\(", ""),
+  
+  # create journal by detecting journal names in citation
+  journal = case_when(  
+      str_detect(Citation, regex("American Sociological Review", ignore_case = T)) ~ "ASR",
+      str_detect(Citation, regex("Academy of Management journal", ignore_case = T)) ~ "AMJ",
+      str_detect(Citation, regex("Academy of Management review", ignore_case = T)) ~ "AMR",
+      str_detect(Citation, regex("Academy of Management discoveries", ignore_case = T)) ~ "Discoveries",
+      str_detect(Citation, regex("Academy of Management Annals", ignore_case = T)) ~ "Annals",
+      str_detect(Citation, regex("Academy of Management learning", ignore_case = T)) ~ "Learning",
+      str_detect(Citation, regex("Administrative Science Quarterly", ignore_case = T)) ~ "ASQ",
+      str_detect(Citation, "Management science") ~ "Management sci",
+      str_detect(Citation, regex("American journal of sociology", ignore_case = T)) ~ "AJS",
+      str_detect(Citation, "Scientific reports") ~ "Nature",
+      str_detect(Citation, regex("nature", ignore_case = T)) ~ "Nature",      
+      str_detect(Citation, regex("Social forces", ignore_case = T)) ~ "Soc forces",
+      str_detect(Citation, "Entrepreneurship Theory and Practice") ~ "ETP",
+      
+      # Soc net has to be after PSPB, annual review, jom, and Org Science because a few of papers in these journals have the phrase "social networks" in the title. Therefore, we have to categorize papers in PSPB, annual review, jom, and Org Science first, then assign the rest of the papers with the phrase "social networks" in citation to the journal Soc net
+      str_detect(Citation, "Journal of Management") ~ "JoM",
+      str_detect(Citation, regex("Organization Science", ignore_case = T)) ~ "Org Sci",
+      
+      str_detect(Citation, regex("annual", ignore_case = T)) ~ "Annual review",
+      str_detect(Citation, regex("Social Networks", ignore_case = T)) ~ "Soc Net", 
+      str_detect(Citation, regex("Social Science Research", ignore_case = T)) ~ "Social science research",
+      
+      str_detect(Citation, regex("Journal of experimental social psychology", ignore_case = T)) ~ "JESP",
+      str_detect(Citation, "Proceedings of the National Academy of Sciences") ~ "PNAS",
+      str_detect(Citation, "Psychological review") ~ "Psyc review",
+      str_detect(Citation, "Psychological science") ~ "Psyc science",
+      str_detect(Citation, "Strategic Management Journal") ~ "SMJ",
+      str_detect(Citation, "Journal of personality and social psychology") ~ "JPSP",
+      str_detect(Citation, "Journal of Applied Psychology") ~ "JAP",
+      str_detect(Citation, regex("Personality and Social Psychology Bulletin", ignore_case = T)) ~ "PSPB",
+
+      str_detect(Citation, regex("Research Policy", ignore_case = T)) ~ "Research policy",
+      str_detect(Citation, regex("\\bScience\\b", ignore_case = T)) ~ "Science",
+      str_detect(Citation, regex("venturing", ignore_case = T)) ~ "JBV",
+      str_detect(Citation, regex("consumer", ignore_case = T)) ~ "Consumer research",
+      str_detect(Citation, regex("rationality", ignore_case = T)) ~ "Rationality",
+      str_detect(Citation, regex("Social psychology quarterly", ignore_case = T)) ~ "Social psyc quarterly",
+      str_detect(Citation, regex("Journal of Political Economy", ignore_case = T)) ~ "Journal of political economy",
+
+      TRUE ~ "others"),
+  
+  # manually recode those that are book chapters by assigning papers with the words ugly, speading, and routledge in citation as book chapter
+  journal = case_when( 
+    str_detect(Citation, paste(c("ugly", "spreading", "Routledge" ), collapse = '|')) ~ "book chapter",
+    TRUE ~ as.character(journal)),
+  
+  # create fields based on journals
+  field = case_when(
+      journal == "AMJ" | journal == "Discoveries" | journal == "Annals" | 
+      journal == "AMR" | journal == "Learning" | journal == "ASQ" | journal == "Management sci" | 
+      journal == "JoM" | journal == "Org Sci" | journal == "SMJ" ~ "management",
+      
+      journal == "ASR" | journal == "AJS" | journal == "Soc forces" | journal == "Soc Net" ~ "sociology",
+      
+      journal == "Nature" | journal == "PNAS" | journal == "Science" ~ "science",
+      
+      journal == "ETP" | journal == "JBV" ~ "entrepreneurship",
+      
+      journal == "PSPB" | journal == "JESP" | journal == "Psyc review" | journal == "Psyc science" |
+      journal == "JPSP" | journal == "JAP" ~ "psychology",
+      
+      journal == "Annual review" | journal == "book chapter" ~ "reviews and books",
+      
+      journal == "Research policy" | journal == "Consumer research" | journal == "Rationality" | 
+      journal == "Social psyc quarterly" | journal == "Social science research" | 
+      journal == "Journal of political economy" ~ "others"
+  ),
+  
+  # get the title 
+  paper_title = str_extract(Citation, "\\).*$") %>% # extract all strings in citation that appears after the closing bracket  
+    str_replace("^\\S* ", "") %>% # remove everything from the beginning until the first white space
+    str_replace("\\..*$", ""), # remove everything starting from the first period .
+  
+  # get the name of first author by extract the first word in the string variable Author 
+  first_author = word(authors, 1),
+  
+  # get the type of papers based on the journal
+  type = case_when(journal == "Annals" | journal == "book chapter" | journal == "Annual review" | 
+                     journal == "JoM" |str_detect(paper_title, 'distinctiveness') ~ "review",
+                   
+                   journal == "AMR" ~ "theory",
+                   
+                   TRUE ~ "empirical"),
+  
+  method = case_when(str_detect(Abstract, regex("experiment", ignore_case = T)) | 
+                       str_detect(Citation, regex("experiment", ignore_case = T)) ~ "experiment",
+                     
+                     TRUE ~ "others")
+) %>% 
+  
+  # merge name of first author with publication year to create abbreviated id for each paper, but still keep original column. Here the original column for first_author disappears because it is overwritten by the new first_author column, so only the original column for year remains in the data 
+  unite(first_author, c("first_author", "year"), sep = " ", remove = F) %>% 
+  
+  # reorder columns so that id and year (the numeric variables) are the first two columns
+  relocate(where(is.numeric), .before = where(is.character)) %>% 
+  relocate(paper_title, .after = id) %>% 
+  janitor::clean_names() -> reading
+```
+
+Let’s take a look at our new dataset now. 
+
+```{r}
+# generate a concise summary of the data
+reading %>% skimr::skim() 
+```
+
+We now have more details for each paper such as the authors, publication year, and journal, among others. 
+
+Now that our dataset is shaped up, let’s dive into some specific analyses. We'll start by visualizing the number of theoretical papers, empirical papers, and review papers I have on my reading list.
+
+```{r}
+# Analyzing the distribution of paper types across research streams
+reading %>% 
+  # Grouping data by research stream for aggregated counts by paper type
+  group_by(research_stream) %>% 
+  # Counting occurrences of each paper type and sorting by count
+  count(type, sort = T) %>% 
+  ungroup() %>% 
+  # Reordering 'type' based on descending count for better visualization
+  mutate(type = reorder(type, -n)) %>%
+  # specifying type as the x axis, count as the y axis, each type of paper will have a different color
+  ggplot(aes(type, n, fill = type)) +
+  # create bar chart
+  geom_col(show.legend = FALSE) +
+  # graph for each research stream
+  facet_wrap(~ research_stream) +
+  # customizing color for each type of paper
+  scale_fill_manual(values = c("#F9A12EFF", "#FC766AFF", "#9B4A97FF")) +
+  # setting up labels and title for the plot
+  labs(x = NULL, 
+       y = "Number of papers",
+       title = "How many papers are theoretical, empirical, and reviews?") 
+  # theme(plot.title = element_text(size=15))
+```
+
+The graphs show that most of my readings are empirical papers, whereas theoretical papers are quite rare. This makes sense since I am more interested in data and empirics than theory and this influences how I choose papers to read for my research. 
+
+From the charts, it's clear most of my readings are empirical papers, while review and theoretical papers are fewer. This makes sense given my focus on data-driven research. 
+
+Next, let’s examine the diversity of publication venues, sorted by fields within each research stream. This will help us understand where most research in my reading list is being published.
+
+```{r}
+# Examining the publication venues by field within each research stream
+reading %>% 
+  group_by(research_stream) %>% 
+  # Counting papers by field and sorting by count
+  count(field, sort = T) %>% 
+  ungroup()  %>% 
+  # Reordering fields within each research stream based on count for coherent visual ordering
+  mutate(field_1 = field,
+         field = reorder_within(field, n, research_stream)
+         ) %>% 
+  # Creating a bar chart with flipped coordinates for better label visibility
+  ggplot(aes(field, n, fill = field_1)) +
+  geom_col(show.legend = FALSE) +
+  # Using reordered scale for the x-axis and adjusting y-axis scale
+  scale_x_reordered() +
+  facet_wrap(~ research_stream, scales = "free_y") +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0)) +
+  labs(y = "Number of papers",
+       x = NULL,
+       title = "How many papers were published in field-specific journals?") +
+  theme(plot.title = element_text(size = 15))
+```
+
+It turns out a significant number of papers come from management journalswhich makes sense since I'm doing a PhD in management. Two other types of journals that I also read quite a lot is sociology and psychology journals, although sociology papers here are mostly about network and gender, whereas psychology papers are mostly about novelty reception. 
+
+What about the number of papers across time? 
+
+```{r}
+# Analyzing the temporal distribution of papers
+reading %>% 
+  # Counting papers by publication year and topic, sorting by count
+  count(year, research_stream, sort= T) %>% 
+  ggplot(aes(year, n)) + 
+  geom_col(show.legend = FALSE, fill = "cyan4") +
+  # Faceting by research stream to see trends within each area of interest
+  facet_grid(rows = vars(research_stream)) +
+  labs(y = "Number of papers", x = NULL, title = "Temporal Distribution of Papers by Year")
+```
+
+It appears that most of the papers on my list were published within the last 10 years. The few papers published before 2000 must be the seminal papers on the topics I study. 
+
+I have also created a variable for the decade a paper was published in, which gives us a broader grouping than year. Let's see how many papers in my list each decade has.
+
+```{r}
+# Exploring the distribution of papers across decades
+reading %>% 
+  # Counting papers by decade and research stream, sorting by count
+  count(decade, research_stream, sort = T) %>% 
+  # Sorting decades in descending order for visual coherence
+  arrange(desc(readr::parse_number(decade)))  %>% 
+  # Creating a column chart to visualize the number of papers per decade
+  ggplot(aes(decade, n, group = 1)) +
+  geom_col(show.legend = FALSE, fill = "cyan4") +
+  # graph for each research stream
+  facet_grid(rows = vars(research_stream)) +
+  labs(x = NULL,
+       y = "Number of papers",
+       title = "How many papers are published in each decade?")
+```
+
+
+
+# Cleaning and tokenizing paper abstracts
+
+Now that our dataset is properly formatted, let’s dive into some exploratory text analysis of the abstracts from our collection of papers. First, let's transform the text into a tidy format, clean it up by removing common stop words and numbers, and ensure consistency by converting plural nouns into their singular forms.
+
+
+
+```{r}
+# Preliminary Text Analysis
+
+# Preparing the abstracts for text analysis by tokenizing the text and cleaning it.
+reading_unnest <- reading %>%
+  # Selecting only the ID and abstract text columns for analysis
+  select(id, abstract) %>% 
+  # Tokenizing abstracts into individual words
+  unnest_tokens(word, abstract) %>% 
+  # Removing common English stop words to focus on relevant terms
+  anti_join(get_stopwords()) %>% 
+  # Filtering out tokens that are numeric as they likely do not contribute to thematic analysis
+  filter(!str_detect(word, "[0-9]+")) %>% 
+  # Normalizing plural words to their singular form to consolidate word forms
+  mutate(word = case_when(str_detect(word, "[^e|aies$]ies$") ~ str_replace(word, "ies$", "y"),
+                          str_detect(word, "[^e|a|oes$]es$") ~ str_replace(word, "es$", "e"),
+                          str_detect(word, "[^ss$|us$]s$") ~ str_remove(word, "s$"),
+                          TRUE ~ word))
+```
+
+# Finding most frequent words and phrases
+
+Now that our abstracts are tidied up, let’s find out which words pop up most frequently. This helps us understand the dominant terms that shape the discussions in our collected papers.
+
+
+
+```{r}
+## Analysis of Most Frequent Words
+reading_unnest %>% 
+  # Count occurrences of each word and sort in descending order
+  count(word, sort = T) %>% 
+  # Focus on the top 20 most frequent words
+  slice_max(n, n = 20)%>%
+  # Reorder words for plotting based on their count
+  mutate(word = reorder(word, n)) %>%
+  # Create a bar plot of word frequencies
+  ggplot(aes(word, n, fill = word)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 250)) +
+  labs(x = NULL, y = "Number of times a word appears",
+       title = "What are the most frequent words in paper abstracts?",
+       subtitle = "After removing stop words and plurals")
+```
+
+Next, we turn our attention to bigrams to uncover common word pairs that give us deeper insights into the themes prevalent in the abstracts. This analysis reveals how certain concepts are typically discussed together in paper abstracts.
+
+
+```{r}
+## Analysis of Most Frequent Bigrams
+reading_unnest %>% 
+  # Converting long-format data to a wide format to facilitate bigram creation
+  group_by(id) %>% 
+  mutate(ind = row_number()) %>% 
+  ungroup() %>% 
+  pivot_wider(id, 
+              names_from = ind, 
+              values_from = word) %>% 
+  # Replace missing values with an empty space for text cohesion
+  mutate_all(replace_na, " ") %>% 
+  # merge one-word columns together to form a continuous text for each abstract 
+  unite(col = abstract_ns, 
+        -id,
+        sep = " ",
+        remove = T) %>% 
+  # break the text into bigrams
+  unnest_tokens(bigram, abstract_ns, token = "ngrams", n = 2) -> reading_unnest_bigrams
+
+# visualizing the most frequent bigrams
+reading_unnest_bigrams %>% 
+  # count the number of times a bigram appears in the corpus
+  count(bigram, sort = TRUE) %>% 
+  # get the 20 most frequent bigrams
+  slice_max(n, n = 20) %>% 
+  # arrange bigrams based on frequency count
+  mutate(bigram = reorder(bigram, n)) %>%
+  ggplot(aes(bigram, n, fill = bigram)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0, 0)) +
+  labs(x = NULL, 
+       y = "Number of times a bigram appears",
+       title = "What are the most frequent birgrams in paper abstracts?",
+       subtitle = "After removing stop words and plurals") +
+  theme(plot.title = element_text(size = 13))
+
+```
+
+The most frequently appearing words are "network", "social", "idea", "study", "women" and "gender". The most common bigrams are "social network", "social capital", "creative ideas", "men women". This aligns perfectly with my research focus on the impact of social networks and the evaluation of creative ideas, especially in how these dynamics differ between men and women in professional settings.
+
+Let's drill down further and analyze the most frequent unigrams and bigrams within each specific research stream. This will help us pinpoint the key topics and discussions prevalent in each stream, providing a clearer picture of their thematic directions.
+```{r}
+# Analyzing most frequent unigrams by topic
+reading_unnest %>%
+  # Joining research stream information to the unigrams
+  left_join(reading %>% select(id, research_stream)) %>% 
+  count(research_stream, word, sort = TRUE) %>% 
+  group_by(research_stream) %>%
+  # Selecting top 10 words in each research stream
+  top_n(10) %>%
+  ungroup() %>%
+  # need to reorder_within() because ggplot otherwise would order the words (which is typed character) alphabetically. reorder_within() orders the words based on its frequency. Here "word" is what we want to order, "n" is what we want to order by, and "Topic" is the group we want to reorder within
+  ggplot(aes(reorder_within(word, n, research_stream), 
+             n,
+             fill = research_stream)) +
+  geom_col(show.legend = FALSE) +
+  scale_x_reordered() +
+  coord_flip() +
+  facet_wrap(~research_stream, scales = "free") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values = c("#317773", "#E2D1F9")) +
+  labs(y = "Word count", x = NULL, title = "What are the most frequent words in each research stream?")
+```
+
+
+```{r}
+# Repeating the process for bigrams
+reading_unnest_bigrams %>% 
+  mutate(id = as.numeric(id)) %>% 
+  left_join(reading %>% select(id, research_stream) ) %>% 
+  count(research_stream, bigram, sort = TRUE) %>%
+  group_by(research_stream) %>%
+  top_n(10) %>%
+  ungroup() %>% 
+  # need to reorder_within() because ggplot otherwise would order the words (which is typed character) alphabetically. reorder_within() orders the words based on its frequency. Here "word" is what we want to order, "n" is what we want to order by, and "Topic" is the group we want to reorder within
+  ggplot(aes(reorder_within(bigram, n, research_stream), 
+             n,
+             fill = research_stream)) +
+  geom_col(show.legend = FALSE) +
+  scale_x_reordered() +
+  coord_flip() +
+  facet_wrap(~research_stream, scales = "free") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_manual(values = c("#317773", "#E2D1F9")) +
+  labs(y = "Word count", x = NULL, title = "What are the most frequent bigrams in each research stream?") 
+```
+
+# Highlighting distinctive terms with TF-IDF and weighted log odds
+
+## TF-IDF
+While frequent word counts can tell us a lot, they don’t always give the full picture. That’s where Term Frequency-Inverse Document Frequency (TF-IDF) comes into play. TF-IDF helps us identify words that are not only common in a specific document but also rare across the entire document corpus, enhancing their significance. This method decreases the weight for words that occur frequently across documents, and increases the weight for words that are rare, highlighting unique aspects of each text.
+
+
+
+```{r}
+# Calculating TF-IDF to identify uniquely important words
+reading_unnest %>% 
+  # Joining research stream data to each word 
+  left_join(reading %>% select(id, research_stream)) %>% 
+  # Counting occurrences of each word within each research stream
+  count(research_stream, word, sort = T) %>%
+   # Calculating tf-idf for each word within research streams
+  bind_tf_idf(word, research_stream, n) -> reading_tfidf
+
+# Plotting the top 20 words with the highest tf-idf scores to identify uniquely important words
+reading_tfidf %>% 
+  # Select the top 20 words with the highest tf-idf scores
+  top_n(20) %>% 
+  # Reordering words based on tf-idf score for better visual representation
+  mutate(word = reorder(word, tf_idf)) %>%
+  ggplot(aes(word, tf_idf, fill = research_stream)) +
+  # create bar chart
+  geom_col() +
+  # flip the x and y axis to better display word labels
+  coord_flip() +
+  # Adjusting text size for clarity
+  theme(strip.text=element_text(size=11)) +
+  # Set custom colors for each research stream
+  scale_fill_manual(values = c("#0063B2FF", "#9CC3D5FF")) +
+  # Adding labels and title to the chart
+  labs(x = NULL, fill = NULL, y = "tf-idf",
+       title = "What are the highest tf-idf words in the corpus?")
+```
+
+
+```{r}
+# Plotting the highest tf-idf words within each research stream to explore their specific vocabulary
+reading_tfidf %>% 
+  group_by(research_stream) %>%
+  top_n(20) %>%
+  ungroup() %>% 
+  # reorder words based on tf-idf within each topic
+  mutate(word = reorder_within(word, tf_idf, research_stream)) %>%
+  # create graph of words and their tf-idf 
+  ggplot(aes(word, tf_idf, fill = research_stream)) +
+  # create bar chart
+  geom_col(show.legend = FALSE) +
+  # create graph for each topic
+  facet_wrap(~ research_stream, scales = "free") +
+  # reorder axis within facets
+  scale_x_reordered() +
+  # flip the x and y axis for better readability
+  coord_flip() +
+  theme(strip.text=element_text(size=11)) +
+  scale_fill_manual(values = c("#0063B2FF", "#9CC3D5FF")) +
+  labs(x = NULL, y = "tf-idf",
+       title = "What are the highest tf-idf words in each research stream?")
+
+# Remove the tf-idf dataframe from memory to free up resources
+rm(reading_tfidf)
+```
+
+
+For papers focused on network and gender, words like "job," "inequality," "access," "leadership," "student," and "board" stand out. These terms underline the study's focus on career access, leadership roles, and the dynamics of inequality within professional settings. On the other hand, novelty reception papers frequently mention words such as "creativity," "creative," "novelty," "contagion," "selection," and "product," which reflect the discourse on how creative products are recognized, selected, and spread within the field.
+
+This TF-IDF analysis helps us identify key themes and terms that define each research stream more effectively than mere frequency counts. It showcases the distinct language tied to different areas of study, providing us with a deeper understanding of the thematic underpinnings of the research.
+
+## Weighted log odds
+
+Beyond frequency counts and TF-IDF, another compelling method to examine how words differ across groups is the weighted log odds ratio. This measure adjusts for word frequency across different documents and is particularly effective when we're interested in pinpointing words that uniquely characterize each group. Unlike TF-IDF, which considers only the presence of words across documents, weighted log odds take into account the actual frequency, providing a more nuanced understanding of word importance.
+
+Let's start by identifying words in our corpus that have the highest weighted log odds, which will help us understand which terms are especially prominent in one research stream compared to others.
+
+```{r}
+# Calculating Weighted Log Odds for Word Frequencies Across Research Streams
+reading_unnest %>% 
+  left_join(reading %>% select(id, research_stream)) %>% # Merging research stream information with the word data
+  count(research_stream, word, sort = T) %>% # Counting the frequency of each word per research stream
+  tidylo::bind_log_odds(research_stream, word, n) -> reading_log_odds # Calculating weighted log odds
+
+# Plotting the Words with the Highest Weighted Log Odds
+reading_log_odds %>% 
+  slice_max(log_odds_weighted, n = 20) %>% # Selecting the top 20 words with highest weighted log odds
+  ggplot(aes(log_odds_weighted, reorder(word, log_odds_weighted), fill = research_stream)) +
+  geom_col() + # Creating a bar chart
+  scale_fill_manual(values = c("#1868ae", "#d9a5b3")) + # Custom color palette
+  scale_x_continuous(expand = c(0, 0)) + # Adjusting the x-axis scale for better display
+  labs(x = "Weighted log odds", y = NULL) # Labeling the axes
+```
+
+Now, let's break down the highest weighted log odds words by each research stream to better capture their specific vocabulary.
+```{r}
+reading_log_odds %>%
+  group_by(research_stream) %>%  
+  slice_max(log_odds_weighted, n = 20) %>% # Filtering the top 20 distinct words in each research stream
+  ungroup() %>% 
+  ggplot(aes(log_odds_weighted, 
+             reorder_within(word, log_odds_weighted, research_stream), 
+             fill = research_stream)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~research_stream, scales = "free_y") + # Creating a separate plot for each research stream
+  scale_y_reordered() + # Creating a separate plot for each research stream
+  scale_fill_manual(values = c("#1868ae", "#d9a5b3")) +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(x = "Weighted log odds", y = NULL)
+```
+
+To delve deeper, let's graph the weighted log odds of each word against its frequency in the context of 'Network and Gender' research.
+
+```{r}
+# Specific Word Analysis in the Context of Gender and Network Topics
+reading_log_odds %>% 
+  filter(str_detect(research_stream, "gender"), n > 10) %>% # Filtering for words in the 'gender' stream with sufficient frequency
+  ggplot(aes(n, log_odds_weighted, label = word)) +
+  geom_hline(yintercept = 0, color = "gray50", lty = 2, size = 1.5) + # Adding a reference line at 0 for neutral log odds
+  geom_point(color = "midnightblue") + # Plotting points
+  ggrepel::geom_text_repel(family = "IBMPlexSans") + # Adding labels to points
+  scale_x_log10() + # Logarithmic scale for x-axis to handle wide data range
+  labs(x = "Number of times a word appears",
+       y = "Weighted log odds",
+       title = "Which words are most specific to the network and gender research stream?") +
+  theme(plot.title = element_text(size = 15))
+```
+
+From this graph, it seems that terms like "network" and "social" are particularly prevalent in 'Network and Gender' papers, highlighting their focus on social structures. Conversely, words like "study" are common but less distinctive since they appear frequently across both research streams.
+
+Similarly, we can analyze the 'Novelty Reception' stream to identify which terms are uniquely significant there.
+```{r}
+reading_log_odds %>% 
+  filter(str_detect(research_stream, "reception"), n > 10) %>% 
+  ggplot(aes(n, log_odds_weighted, label = word)) +
+  geom_hline(yintercept = 0, color = "gray50", lty = 2, size = 1.5) +
+  geom_point(color = "midnightblue") +
+  ggrepel::geom_text_repel(family = "IBMPlexSans") +
+  scale_x_log10() +
+  labs(x = "Number of times a word appears",
+       y = "Weighted log odds",
+       title = "Which words are most specific to the novelty reception research stream?") +
+  theme(plot.title = element_text(size = 15))
+
+# Clean up the created data frame to free up memory
+rm(reading_log_odds)
+```
+
+In the 'Novelty Reception' papers, "idea" is the most frequently occurring words, but it is not as unique to this stream as "creativity" because it is also frequently used in the 'Network and Gender' stream too. Also, "social" and "network" are used quite often in this stream, but they are used much more often in the 'Network and Gender' stream and as such has a negative weighted log odds.
+
+# Conclusion and next steps
+
+In this notebook, we've analyzed over a hundred research papers within two key areas: "Novelty Reception" and "Network and Gender." We started by extracting important information from each paper's references, such as the authors, publication year, and journal. Then, using TF-IDF and weighted log odds, we analyzed the texts to uncover the most significant words and phrases in discussions about how innovative ideas are accepted and how social networks influence the careers of men and women differently. We've presented these findings visually to make the trends and themes easier to understand.
+
+Looking ahead, our next step is to apply topic modeling to these paper abstracts. This will help us identify and understand the main themes discussed across the papers in more detail, enhancing our understanding of the scholarly conversations on novelty reception and network and gender.

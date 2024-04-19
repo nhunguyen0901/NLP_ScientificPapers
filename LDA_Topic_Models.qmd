@@ -1,0 +1,310 @@
+---
+title: "Applying LDA Topic Models to Analyze Research Abstracts"
+author: Julie Nguyen
+format:
+  html:
+    toc: true
+    toc-location: left
+    embed-resources: true
+editor: visual
+execute:
+  cache: true
+---
+Welcome to the next phase of my journey to prepare for my comprehensive exams! Here, we delve deeper into the world of Natural Language Processing (NLP) to unearth the thematic foundations of the research papers on my reading list. Having previously refined and analyzed the abstracts of over a hundred papers using TF-IDF and weighted log odds, our focus now shifts to topic modeling—a powerful NLP technique that detects patterns and themes across vast text collections.
+
+Here's our roadmap for our exploration:
+
+1. Preparation for Topic Modeling: We begin by transforming our cleaned text data from a tidy format, where each word is isolated in its own row, back to a wide format where each document is represented in a single row. This preparation is crucial for topic modeling.
+2. Creating a Document-Term Matrix (DTM): We convert the wide-format text data into a document-term matrix. This matrix serves as the input for our topic modeling, enabling the detection of textual patterns.
+3. Training Topic Models: Using Latent Dirichlet Allocation (LDA), we train a series of topic models, experimenting with topics ranging from 5 to 130. Our objective is to identify the model that most accurately captures the core themes, assessed by their topic coherence.
+4. Evaluating Models: We evaluate the semantic coherence of each model and use visualizations to determine the most effective model.
+5. Analyzing Topic Model Results: Once we select our model, we delve into the topics it uncovered. We examine the prevalence and coherence of each topic and employ visualizations to show the most dominant topics and their pivotal terms.
+6. Detecting Communities of Topics: Lastly, we explore how topics relate to each other using a dendrogram, which visually represents how topics cluster based on their co-occurrence in documents. This helps us understand which topics commonly intersect, shedding light on their relationships.
+
+Join me as we transform academic text into a structured exploration of academic discourse across over 100 papers in my reading list. 
+
+# Creating input for modeling
+
+First, we need to read and convert the text data we created in the last notebook, now stripped of stop words and numbers and currently in the tidy format (i.e., a word per row), back into the wide format (i.e., one document per row).
+
+```{r setup}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(dplyr) # manipulate data
+library(ggplot2) # visualize data
+library(kableExtra) # create pretty table
+library(textmineR) # run topic model
+library(purrr)
+library(dendextend) # create dendrogram
+library(ComplexHeatmap) # ceate heatmap
+library(circlize)
+```
+
+```{r, eval=FALSE}
+reading <- readRDS("reading.rds")
+
+# Preparing the abstracts for text analysis by tokenizing the text and cleaning it.
+reading_unnest <- reading %>%
+  # Selecting only the ID and abstract text columns for analysis
+  select(id, abstract) %>% 
+  # Tokenizing abstracts into individual words
+  unnest_tokens(word, abstract) %>% 
+  # Removing common English stop words to focus on relevant terms
+  anti_join(get_stopwords()) %>% 
+  # Filtering out tokens that are numeric as they likely do not contribute to thematic analysis
+  filter(!str_detect(word, "[0-9]+")) %>% 
+  # Normalizing plural words to their singular form to consolidate word forms
+  mutate(word = case_when(str_detect(word, "[^e|aies$]ies$") ~ str_replace(word, "ies$", "y"),
+                          str_detect(word, "[^e|a|oes$]es$") ~ str_replace(word, "es$", "e"),
+                          str_detect(word, "[^ss$|us$]s$") ~ str_remove(word, "s$"),
+                          TRUE ~ word))
+
+reading_unnest %>% 
+  # create id for each word within a reading
+  group_by(id) %>% 
+  mutate(ind=row_number()) %>% 
+  # convert long table to wide table to create a column for each word in each reading 
+  pivot_wider(id, 
+              names_from = ind,
+              values_from = word) %>% 
+  # reorder rows based on id 
+  arrange(id) %>% 
+  # replace NA with empty space
+  mutate_all(replace_na, "") %>% 
+  # merge one-word columns together
+  unite(col = abstract_ns, 
+        # leave out id column
+        -id, 
+        # use a "" as a separator
+        sep = " ",
+        # remove input column
+        remove = T)  -> reading_input
+```
+
+Once we have our text in a one-document-per-row format, we next convert this into a document-term matrix, which will serve as the input for our topic models.
+
+```{r, eval=FALSE}
+# create document-term matrix as input for topic model
+CreateDtm(doc_vec = reading_input$abstract_ns, 
+          doc_names = reading_input$id,
+          # choose unigrams and bigrams
+          ngram_window = c(1, 2)) -> reading_dtm
+
+```
+
+# Training and evaluating topic models
+
+Now we can start training our topic models `r emo::ji("hooray")` `r emo::ji("hooray")`. We need to run the models with a range of topics and then choose one with highest topic coherence. Let's try 126 models with 5 to 130 topics.
+
+```{r, eval=F}
+# run topic models with k from 5 to 100
+many_models_lda <- tibble(K = 5:100) %>%
+  mutate(topic_model = future_map(K, ~ FitLdaModel(dtm = reading_dtm, k = ., iterations = 5000)))
+
+saveRDS(many_models_lda, "many_models_lda.rds")
+
+# run topic models with k from 101 to 130
+
+many_models_lda_2 <- tibble(K = 101:130) %>%
+  mutate(topic_model = future_map(K, ~ FitLdaModel(dtm = reading_dtm, k = ., iterations = 5000)))
+
+saveRDS(many_models_lda_2, "many_models_lda_2.rds")
+
+# merge the results 
+rbind(many_models_lda, many_models_lda_2) %>% 
+  arrange(K) %>% 
+  # calculate semantic coherence
+  mutate(semantic_coherence = map_dbl(topic_model, function(x) mean(x$coherence))) -> many_models_lda
+
+saveRDS(many_models_lda, "many_models_lda.rds")
+
+```
+
+Next, we calculate the average topic coherence for each of our 126 models and create a line graph to see how topic coherence changes across a range of topic numbers.
+
+```{r, eval=F}
+# graph coherence 
+many_models_lda %>% 
+  ggplot(aes(K, semantic_coherence)) +
+  geom_line(size = 1.5,
+            color = "#be1558") +
+  labs(x = "K (number of topics)",
+       y = "Average Coherence of Topics",
+       title = "Semantic coherence by number of topics") 
+
+rm(many_models_lda)
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics("sem_coh.png")
+```
+
+It seems that 121 topics give us the model with highest semantic coherence. Let's get the results of that model and see what it gives us!
+
+```{r, eval = F}
+many_models_lda %>% 
+  # filter(K <= 100) %>% 
+  slice_max(semantic_coherence) %>% 
+  pull(K) -> k
+
+# get the output of the model with higest sematic coherence
+model_121 <- many_models_lda %>% 
+  filter(K == k) %>% 
+  pull(topic_model) %>% 
+  .[[1]]
+
+saveRDS(model_121, "model_121.rds")
+rm(many_models_lda)
+```
+
+# Analyzing topic model results
+
+As a first step to understanding LDA results, let's get a summary table describing the topics LDA discovers.
+
+```{r}
+model_121 <- readRDS("model_121.rds")
+
+# create summary of topics
+SummarizeTopics(model_121)  -> model_121_sum
+
+model_121_sum %>%
+  arrange(-prevalence) %>% 
+  kbl(caption = "Summary of 90 topics", col.names = NULL) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), fixed_thead = T) %>%
+  add_header_above(c("ID","topic","% of discourse","coherence","central terms \n high pr(term | topic)","specific terms \n high pr(topic | term)")) %>% 
+  scroll_box(width = "100%", height = "700px")
+```
+
+Next, let's see the 20 topics that are most prevalent in our corpus and create a graph for them.
+
+```{r}
+model_121_sum %>% 
+  # get the 20 most prevalent topics
+  slice_max(prevalence, n = 20) %>% 
+  # reorder the topics based on their prevalence
+  mutate(topic = reorder(topic, prevalence)) %>% 
+  # create a graph with topic on the x axis, prevalence in the y axis, 
+  # add their most central terms as label, give each topic a different color
+  ggplot(aes(x = topic, 
+             y = prevalence, 
+             label = top_terms_phi, 
+             fill = topic)) +
+  # create a bar graph
+  geom_col(show.legend = FALSE) +
+  # horizontal alignment for text as bottom (0) so that the label will not overlap with bars
+  geom_text(hjust = 0,
+            # nudge label for y axis variable to create white space between label and bars
+            nudge_y = 0.02,
+            # change font type and font size of the label
+            size = 3,
+            family = "IBMPlexSans") +
+  # flip x axis and y axis
+  coord_flip() +
+  # get rid of the space between bars and axis labels on y axis
+  scale_y_continuous(expand = c(0,0),
+                     # set limit for the y axis so that all the labels will appear
+                     limits = c(0, 3.5)) +
+  # change to theme tufte which strips graph of border, axis lines, and grids
+  ggthemes::theme_tufte(base_family = "IBMPlexSans", ticks = FALSE) +
+  # change font size of title and subtile
+  theme(plot.title = element_text(size = 16, family="IBMPlexSans-Bold"),
+        plot.subtitle = element_text(size = 13)) +
+  # change text for axis and title and subtle
+  labs(x = NULL, y = "Topic prevalence",
+       title = "What are the most prevalent topics in the corpus?",
+       subtitle = "With the top 5 most central words that contribute to each topic")
+```
+
+Let's also see the most coherent topics in our corpus.
+
+```{r}
+model_121_sum %>% 
+  slice_max(coherence, n = 20) %>% 
+  mutate(topic = reorder(topic, coherence)) %>% 
+  ggplot(aes(x = topic, 
+             y = coherence, 
+             label = top_terms_phi, 
+             fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(hjust = 0, 
+            nudge_y = 0.02,
+            size = 3,
+            family = "IBMPlexSans") +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 2.5)) +
+  ggthemes::theme_tufte(base_family = "IBMPlexSans", ticks = FALSE) +
+  theme(plot.title = element_text(size = 16, family="IBMPlexSans-Bold"),
+        plot.subtitle = element_text(size = 13)) +
+  labs(x = NULL, y = "Topic coherence",
+       title = "What are the most coherent topics in the corpus?",
+       subtitle = "With the top 5 most central words that contribute to each topic")
+```
+
+Next, let's create a scatterplot to see the relationship between topic coherence and prevalence.
+
+```{r}
+model_121_sum %>% 
+  ggplot(aes(coherence, prevalence)) + 
+  geom_point(
+    color = case_when(model_121_sum$prevalence > median(model_121_sum$prevalence) ~ "#d9a5b3", 
+                      TRUE ~ "#1868ae"),
+    size = 2) +
+  ggrepel::geom_text_repel(aes(label = topic),
+                           family = "IBMPlexSans",
+                           box.padding   = 0.7,
+                           direction = "y") +
+  labs(title = "Scatterplot of topic prevalence and coherence",
+       subtitle = "With above-median-prevalence topics in pink and below-median-prevalence \n topics in blue") 
+```
+
+
+
+# Detecting communities of topics
+
+Next, let's take a look at the relationship between our topics based on how frequent they cooccur in an abstract. One way to do this is to generate a dendrogram of topics. Here, topics closer to each other are more likely to be present in the same abstract than topics further apart form each other.
+
+```{r, fig.height= 25, fig.width=14}
+# get topic prevalence in each paper
+paper_topic <- as.data.frame(model_121$theta)
+
+# get the data with paper id as rows and topic prevalence as colum 
+paper_topic[,1:ncol(paper_topic)-1] %>% 
+  # convert this dataframe into a matrix
+  as.matrix() %>% 
+  # transpose the matrix so that paper id is now the columns and topic prevalence is now the rows
+  t() %>% 
+  # calculate the Jensen Shannon distance between each topic's vectors of probability that it is present in the abstract of each of 103 papers (i.e., comparing topics based on its presence in the papers)
+  philentropy::JSD() %>% 
+  # convert to a distance matrix
+  as.dist() %>% 
+  # conduct hierarchical cluster analysis on the topics
+  hclust(method = "ward.D") -> topic_clusters
+
+# rename topic labels 
+topic_clusters$labels <- paste(model_121_sum$topic, model_121_sum$label_1)
+
+topic_clusters %>% 
+  # convert to dendrogram
+  as.dendrogram() %>%
+  # set label color 
+  set("labels_col", value = c("#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4",
+                              "#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4",
+                              "#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4",
+                              "#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4"), k=20) %>% 
+  # set label size
+  set("labels_cex", 1) %>% 
+  # set branches color
+  set("branches_k_color", value = c("#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4",
+                              "#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4",
+                              "#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4",
+                              "#ecbdb1", "#f46e7b", "#f23955", "#7fd1c0", "#baf0e4"), k = 20) %>%
+  # set branches size
+  set("branches_lwd", 1.5) %>% 
+  as.ggdend() %>% 
+  ggplot(horiz = T) +
+  scale_y_reverse(expand = c(0.5, 0))
+  
+```
