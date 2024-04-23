@@ -10,22 +10,23 @@ editor: visual
 execute:
   cache: true
 ---
-Welcome to the next phase of my journey to prepare for my comprehensive exams! Here, we delve deeper into the world of Natural Language Processing (NLP) to unearth the thematic foundations of the research papers on my reading list. Having previously refined and analyzed the abstracts of over a hundred papers using TF-IDF and weighted log odds, our focus now shifts to topic modeling—a powerful NLP technique that detects patterns and themes across vast text collections.
+
+Welcome to the next phase of my journey to prepare for my comprehensive exams! Here, we delve deeper into the world of Natural Language Processing (NLP) to unearth the thematic foundations of the research papers on my reading list. Having previously refined and analyzed the abstracts of over a hundred papers using TF-IDF and weighted log odds, our focus now shifts to topic modeling-a powerful NLP technique that detects patterns and themes across vast text collections.
 
 Here's our roadmap for our exploration:
 
-1. Preparation for Topic Modeling: We begin by transforming our cleaned text data from a tidy format, where each word is isolated in its own row, back to a wide format where each document is represented in a single row. This preparation is crucial for topic modeling.
-2. Creating a Document-Term Matrix (DTM): We convert the wide-format text data into a document-term matrix. This matrix serves as the input for our topic modeling, enabling the detection of textual patterns.
-3. Training Topic Models: Using Latent Dirichlet Allocation (LDA), we train a series of topic models, experimenting with topics ranging from 5 to 130. Our objective is to identify the model that most accurately captures the core themes, assessed by their topic coherence.
-4. Evaluating Models: We evaluate the semantic coherence of each model and use visualizations to determine the most effective model.
-5. Analyzing Topic Model Results: Once we select our model, we delve into the topics it uncovered. We examine the prevalence and coherence of each topic and employ visualizations to show the most dominant topics and their pivotal terms.
-6. Detecting Communities of Topics: Lastly, we explore how topics relate to each other using a dendrogram, which visually represents how topics cluster based on their co-occurrence in documents. This helps us understand which topics commonly intersect, shedding light on their relationships.
+1.  Preparation for Topic Modeling: We begin by transforming our cleaned text data from a tidy format, where each word is isolated in its own row, back to a wide format where each document is represented in a single row. This preparation is crucial for topic modeling.
+2.  Creating a Document-Term Matrix (DTM): We convert the wide-format text data into a document-term matrix. This matrix serves as the input for our topic modeling, enabling the detection of textual patterns.
+3.  Training Topic Models: Using Latent Dirichlet Allocation (LDA), we train a series of topic models, experimenting with topics ranging from 5 to 130. Our objective is to identify the model that most accurately captures the core themes, assessed by their topic coherence.
+4.  Evaluating Models: We evaluate the semantic coherence of each model and use visualizations to determine the most effective model.
+5.  Analyzing Topic Model Results: Once we select our model, we delve into the topics it uncovered. We examine the prevalence and coherence of each topic and employ visualizations to show the most dominant topics and their pivotal terms.
+6.  Detecting Communities of Topics: Lastly, we explore how topics relate to each other using a dendrogram, which visually represents how topics cluster based on their co-occurrence in documents. This helps us understand which topics commonly intersect, shedding light on their relationships.
 
-Join me as we transform academic text into a structured exploration of academic discourse across over 100 papers in my reading list. 
+Join me as we transform academic text into a structured exploration of academic discourse across over 100 papers in my reading list.
 
 # Creating input for modeling
 
-First, we need to read and convert the text data we created in the last notebook, now stripped of stop words and numbers and currently in the tidy format (i.e., a word per row), back into the wide format (i.e., one document per row).
+First, we read the data on we created in the last notebook, with info on the papers and their metadata (authors, publication year, etc.). Then, we transform the abstract texts into a tidy format, clean them up by removing common stop words and numbers, and ensure consistency by converting plural nouns into their singular forms. Next, these texts are transformed back into the wide format (i.e., one document per row).
 
 ```{r setup}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
@@ -33,18 +34,31 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 
 ```{r}
 library(dplyr) # manipulate data
+library(tidyr)
 library(ggplot2) # visualize data
 library(kableExtra) # create pretty table
 library(textmineR) # run topic model
+library(tidytext)
+library(stringr)
 library(purrr)
+library(furrr)
 library(dendextend) # create dendrogram
 library(ComplexHeatmap) # ceate heatmap
 library(circlize)
+plan(multisession)
 ```
 
-```{r, eval=FALSE}
+```{r}
 reading <- readRDS("reading.rds")
 
+reading %>% head(2) %>% kable()
+
+reading %>%
+  mutate(id = str_replace(first_author, ", ", "_")) %>% 
+  select(-first_author) -> reading
+```
+
+```{r}
 # Preparing the abstracts for text analysis by tokenizing the text and cleaning it.
 reading_unnest <- reading %>%
   # Selecting only the ID and abstract text columns for analysis
@@ -59,9 +73,7 @@ reading_unnest <- reading %>%
   mutate(word = case_when(str_detect(word, "[^e|aies$]ies$") ~ str_replace(word, "ies$", "y"),
                           str_detect(word, "[^e|a|oes$]es$") ~ str_replace(word, "es$", "e"),
                           str_detect(word, "[^ss$|us$]s$") ~ str_remove(word, "s$"),
-                          TRUE ~ word))
-
-reading_unnest %>% 
+                          TRUE ~ word)) %>% 
   # create id for each word within a reading
   group_by(id) %>% 
   mutate(ind=row_number()) %>% 
@@ -81,45 +93,34 @@ reading_unnest %>%
         sep = " ",
         # remove input column
         remove = T)  -> reading_input
+
+reading_input %>% head(5) %>% kable()
 ```
 
 Once we have our text in a one-document-per-row format, we next convert this into a document-term matrix, which will serve as the input for our topic models.
 
-```{r, eval=FALSE}
+```{r, eval=F}
 # create document-term matrix as input for topic model
 CreateDtm(doc_vec = reading_input$abstract_ns, 
           doc_names = reading_input$id,
           # choose unigrams and bigrams
           ngram_window = c(1, 2)) -> reading_dtm
-
 ```
 
 # Training and evaluating topic models
 
-Now we can start training our topic models `r emo::ji("hooray")` `r emo::ji("hooray")`. We need to run the models with a range of topics and then choose one with highest topic coherence. Let's try 126 models with 5 to 130 topics.
+Now we can start training our topic models `r emo::ji("hooray")` `r emo::ji("hooray")`. We need to train a series of models with different numbers of topics and then choose one with highest topic coherence. Here, we try 13 number of topics from 10 to 130.
 
 ```{r, eval=F}
-# run topic models with k from 5 to 100
-many_models_lda <- tibble(K = 5:100) %>%
-  mutate(topic_model = future_map(K, ~ FitLdaModel(dtm = reading_dtm, k = ., iterations = 5000)))
-
-saveRDS(many_models_lda, "many_models_lda.rds")
-
-# run topic models with k from 101 to 130
-
-many_models_lda_2 <- tibble(K = 101:130) %>%
-  mutate(topic_model = future_map(K, ~ FitLdaModel(dtm = reading_dtm, k = ., iterations = 5000)))
-
-saveRDS(many_models_lda_2, "many_models_lda_2.rds")
-
-# merge the results 
-rbind(many_models_lda, many_models_lda_2) %>% 
+readRDS("many_models_lda.rds") -> many_models_lda
+# run topic models with k from 10 to 130
+many_models_lda <- tibble(K = c(10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130)) %>%
+  mutate(topic_model = future_map(K, ~ FitLdaModel(dtm = reading_dtm, k = ., iterations = 5000))) %>% 
   arrange(K) %>% 
   # calculate semantic coherence
-  mutate(semantic_coherence = map_dbl(topic_model, function(x) mean(x$coherence))) -> many_models_lda
+  mutate(semantic_coherence = map_dbl(topic_model, function(x) mean(x$coherence)))
 
 saveRDS(many_models_lda, "many_models_lda.rds")
-
 ```
 
 Next, we calculate the average topic coherence for each of our 126 models and create a line graph to see how topic coherence changes across a range of topic numbers.
@@ -141,21 +142,20 @@ rm(many_models_lda)
 knitr::include_graphics("sem_coh.png")
 ```
 
-It seems that 121 topics give us the model with highest semantic coherence. Let's get the results of that model and see what it gives us!
+It seems that 100 topics give us the model with highest semantic coherence. Let's get the results of that model and see what it gives us!
 
 ```{r, eval = F}
 many_models_lda %>% 
-  # filter(K <= 100) %>% 
   slice_max(semantic_coherence) %>% 
   pull(K) -> k
 
 # get the output of the model with higest sematic coherence
-model_121 <- many_models_lda %>% 
+model_100 <- many_models_lda %>% 
   filter(K == k) %>% 
   pull(topic_model) %>% 
   .[[1]]
 
-saveRDS(model_121, "model_121.rds")
+saveRDS(model_100, "model_100.rds")
 rm(many_models_lda)
 ```
 
@@ -164,14 +164,13 @@ rm(many_models_lda)
 As a first step to understanding LDA results, let's get a summary table describing the topics LDA discovers.
 
 ```{r}
-model_121 <- readRDS("model_121.rds")
-
+model_100 <- readRDS("model_100.rds")
 # create summary of topics
-SummarizeTopics(model_121)  -> model_121_sum
+SummarizeTopics(model_100)  -> model_100_sum
 
-model_121_sum %>%
+model_100_sum %>%
   arrange(-prevalence) %>% 
-  kbl(caption = "Summary of 90 topics", col.names = NULL) %>%
+  kbl(caption = "Summary of 100 topics", col.names = NULL) %>%
   kable_styling(bootstrap_options = c("striped", "hover", "responsive"), fixed_thead = T) %>%
   add_header_above(c("ID","topic","% of discourse","coherence","central terms \n high pr(term | topic)","specific terms \n high pr(topic | term)")) %>% 
   scroll_box(width = "100%", height = "700px")
@@ -180,7 +179,7 @@ model_121_sum %>%
 Next, let's see the 20 topics that are most prevalent in our corpus and create a graph for them.
 
 ```{r}
-model_121_sum %>% 
+model_100_sum %>% 
   # get the 20 most prevalent topics
   slice_max(prevalence, n = 20) %>% 
   # reorder the topics based on their prevalence
@@ -220,7 +219,7 @@ model_121_sum %>%
 Let's also see the most coherent topics in our corpus.
 
 ```{r}
-model_121_sum %>% 
+model_100_sum %>% 
   slice_max(coherence, n = 20) %>% 
   mutate(topic = reorder(topic, coherence)) %>% 
   ggplot(aes(x = topic, 
@@ -246,10 +245,10 @@ model_121_sum %>%
 Next, let's create a scatterplot to see the relationship between topic coherence and prevalence.
 
 ```{r}
-model_121_sum %>% 
+model_100_sum %>% 
   ggplot(aes(coherence, prevalence)) + 
   geom_point(
-    color = case_when(model_121_sum$prevalence > median(model_121_sum$prevalence) ~ "#d9a5b3", 
+    color = case_when(model_100_sum$prevalence > median(model_100_sum$prevalence) ~ "#d9a5b3", 
                       TRUE ~ "#1868ae"),
     size = 2) +
   ggrepel::geom_text_repel(aes(label = topic),
@@ -260,15 +259,60 @@ model_121_sum %>%
        subtitle = "With above-median-prevalence topics in pink and below-median-prevalence \n topics in blue") 
 ```
 
+We can also get the papers that are most associated with a particular topic. To do that, we extract the topic prevalence for each paper, which is stored in the theta matrix in LDA results.
 
+```{r}
+# get topic prevalence in each paper
+paper_topic <- as.data.frame(model_100$theta)
 
-# Detecting communities of topics
+# create id for each paper using row names
+paper_topic$id <- row.names(paper_topic) 
+
+# merge with orginal data
+reading <- left_join(reading, paper_topic)
+```
+
+```{r}
+# write a function to filter out documents highly associated with each topic
+get_top_paper <- function(topic) {
+  var <- rlang::sym(topic) # when writing a function in which we use string as input for dplyr function such as filter(), need to use sym() and !! in the rlang package for the string variables
+  reading %>% 
+    # select citation, abstract and topic columns
+    select(citation, abstract, !!var) %>% 
+    # filter rows when prevalence of a particular topic is higher than 10 perceent
+    filter(!!var > .1) %>% 
+    # reorder rows based on topic names
+    arrange(desc(!!var)) %>% 
+    # rename variable
+    rename(theta = !!var) -> top_paper
+  return(top_paper)
+}
+
+# apply the function to each topic 
+# select columns that start with "t_" then get column names and turn them into a variable called "topic" in a tibble
+tibble(topic = reading %>% 
+         select(starts_with("t_")) %>% 
+         colnames()) %>%
+  # apply function get_top_paper to each row in variable topic to create a variable called "top_paper" in a tibble
+  mutate(top_paper = map(topic, get_top_paper)) %>% 
+  # unnest list variable top_paper
+  unnest(top_paper) %>% 
+  # create pretty table using kable
+  kbl(caption = "Topics that each paper is highly associated with") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"),
+                fixed_thead = T) %>%
+  scroll_box(width = "100%", height = "700px")
+```
+
+# Detecting communities
+
+## Communities of topics
 
 Next, let's take a look at the relationship between our topics based on how frequent they cooccur in an abstract. One way to do this is to generate a dendrogram of topics. Here, topics closer to each other are more likely to be present in the same abstract than topics further apart form each other.
 
 ```{r, fig.height= 25, fig.width=14}
 # get topic prevalence in each paper
-paper_topic <- as.data.frame(model_121$theta)
+paper_topic <- as.data.frame(model_100$theta)
 
 # get the data with paper id as rows and topic prevalence as colum 
 paper_topic[,1:ncol(paper_topic)-1] %>% 
@@ -284,7 +328,7 @@ paper_topic[,1:ncol(paper_topic)-1] %>%
   hclust(method = "ward.D") -> topic_clusters
 
 # rename topic labels 
-topic_clusters$labels <- paste(model_121_sum$topic, model_121_sum$label_1)
+topic_clusters$labels <- paste(model_100_sum$topic, model_100_sum$label_1)
 
 topic_clusters %>% 
   # convert to dendrogram
@@ -308,3 +352,342 @@ topic_clusters %>%
   scale_y_reverse(expand = c(0.5, 0))
   
 ```
+
+## Communities of papers
+
+We can also visualize the relationship among our papers based on how frequent they include the same topics in their abstract. Once again, let’s create a dendrogram, but instead of topics this is a dendrogram of papers. Here, papers closer to each other are more likely to be include the same topics in their abstract than papers further apart form each other.
+
+```{r, fig.height= 25, fig.width=14}
+# get the data with paper id as rows and topic prevalence as colum 
+paper_topic[,1:ncol(paper_topic)-1] %>% 
+  # convert this dataframe into a matrix
+  as.matrix() %>% 
+  # calculate the Jensen Shannon distance each paper's vector of probability that each of the 86 topics is present in its abstract (i.e., comparing papers based on its topic distribution)
+  philentropy::JSD() %>% 
+  # convert to a distance matrix
+  as.dist() %>% 
+  # conduct hierarchical cluster analysis on the topics
+  hclust(method = "ward.D") -> paper_clusters
+
+# rename topic labels 
+paper_clusters$labels <- reading$id
+
+paper_clusters %>% 
+  # convert into dendrogram
+  as.dendrogram() %>%
+  # set label color 
+  set("labels_col", value = c("#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b",
+                              "#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b",
+                              "#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b",
+                              "#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b"), k=20) %>% 
+  # set label size
+  set("labels_cex", 1) %>% 
+  # set branches color
+  set("branches_k_color", value = c("#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b",
+                              "#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b",
+                              "#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b",
+                              "#058fb2", "#f9ae33", "#47c7eb", "#c8d9cd", "#527e4b"), k = 20) %>%
+  # set branches size
+  set("branches_lwd", 1.5) %>% 
+  as.ggdend() %>% 
+  ggplot(horiz = T) +
+  scale_y_reverse(expand = c(0.5, 0))
+```
+
+# Group differences in topic distributions
+
+Now let’s move on the how topic prevalence differ across different groups of papers.
+
+## Differences across fields
+
+To visualize how fields differ in the topics they mentioned, we can create a heatmap that uses shades of color to depict variation in topic prevalence in each field - the darker the shades the more prevalent a topic is.
+
+```{r}
+# create id for each paper using row names
+paper_topic$id <- row.names(paper_topic) 
+
+#converting the document topic matrix to a "tidy" form
+pivot_longer(paper_topic,
+             cols=starts_with("t_"),
+             names_to="topic",
+             values_to="prevalence") %>% 
+  # rename topics so that they will be ordered according to topic number
+  mutate(topic = case_when(
+    str_detect(topic, "_([0-9]$)") ~ sub("_([0-9]$)", "_00\\1", topic),
+    str_detect(topic, "_([1-9][0-9]$)") ~ sub("_([1-9][0-9]$)", "_0\\1", topic),
+    TRUE ~ topic)) -> paper_topic_l
+```
+
+
+
+```{r}
+paper_topic_l %>%
+  # get field column from original data
+  left_join(reading %>% select(id, field)) %>%  
+  # get average topic prevalence for each field
+  group_by(topic, field) %>%
+  summarize(mp = mean(prevalence)) %>% 
+  # cast back to "wide" format with each row as a field and each column as a topic
+  pivot_wider(values_from = mp,
+              names_from = topic) -> field_topic
+
+
+# convert to matrix
+field_topic %>% 
+  # remove field variable
+  select(-field) %>% 
+  # transpose the matrix
+  t() %>% 
+  # convert to matrix type
+  as.matrix() -> field_topic_mat
+
+# change row names - topic labels
+rownames(field_topic_mat) <- paste(model_100_sum$topic, model_100_sum$label_1)
+
+# change column names - field labels
+colnames(field_topic_mat) <- field_topic$field
+```
+
+
+```{r, fig.height= 14, fig.width=14}
+# create heatmap
+heatmap(field_topic_mat, 
+        # normalize column values 
+        scale = "column", 
+        # set size for row labels
+        cexRow = 0.7, 
+        # set size for column labels
+        cexCol = 1,
+        # set the color palette
+        col = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrBr"))(256))
+```
+
+
+This heatmap are quite hard to see because we have many topics. Let’s filter out the 10 most prevalent topics in each field.
+
+```{r}
+paper_topic_l %>%
+  # get field column from original data
+  left_join(reading %>% select(id, field)) %>% 
+  # get average topic prevalence for each field
+  group_by(topic, field) %>%
+  summarize(mp = mean(prevalence)) %>% 
+  ungroup() %>% 
+  group_by(field) %>% 
+  slice_max(mp, n = 10) %>% 
+  ungroup() %>% 
+  mutate(topic = reorder_within(topic, mp, field)) %>% 
+  ggplot(aes(topic, mp, fill = field)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_x_reordered() +
+  scale_y_continuous(expand = c(0, 0)) +
+  facet_wrap(~field, ncol = 4, scales = "free") +
+  labs(x = "Average topic prevalence", y = NULL,
+       title = "What are the 10 most prevalent topics in each field?") +                        
+  theme(strip.text.x = element_text(size = 11))
+```
+
+## Differences across time
+
+Next, let’s look at how topic distribution changes across years.
+
+```{r, fig.height= 14, fig.width=14}
+paper_topic_l %>%
+  # get field column from original data
+  left_join(reading %>% select(id, year)) %>% 
+  # get average topic prevalence for each field
+  group_by(topic, year) %>%
+  summarize(mp = mean(prevalence)) %>% 
+  # cast back to "wide" format with each row as a field and each column as a topic
+  pivot_wider(values_from = mp,
+              names_from = topic) -> year_topic
+
+
+# convert to matrix
+year_topic %>% 
+  # remove field variable
+  select(-year) %>% 
+  # transpose the matrix
+  t() %>% 
+  # convert to matrix type
+  as.matrix() -> year_topic_mat
+
+# change row names - topic labels
+rownames(year_topic_mat) <- paste(model_100_sum$topic, model_100_sum$label_1)
+
+# change column names - field labels
+colnames(year_topic_mat) <- year_topic$year
+
+# create heatmap
+heatmap(year_topic_mat, 
+        # normalize column values 
+        scale = "column", 
+        # set size for row labels
+        cexRow = 0.7, 
+        # set size for column labels
+        cexCol = 1,
+        # set the color palette
+        col = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrBr"))(256))
+```
+Next, we can get the 20 most prevalent topics in each year.
+
+```{r, fig.height= 25, fig.width=14}
+paper_topic_l %>%
+  # get field column from original data
+  left_join(reading %>% select(id, year)) %>% 
+  # get average topic prevalence for each field
+  group_by(topic, year) %>%
+  summarize(mp = mean(prevalence)) %>% 
+  ungroup() %>% 
+  group_by(year) %>% 
+  slice_max(mp, n = 10) %>% 
+  ungroup() %>% 
+  mutate(topic = reorder_within(topic, mp, year)) %>% 
+  ggplot(aes(topic, mp)) +
+  geom_col(show.legend = FALSE, fill = "#2BAE66FF") +
+  coord_flip() +
+  scale_x_reordered() +
+  scale_y_continuous(expand = c(0, 0)) +
+  facet_wrap(~year, ncol = 3, scales = "free") +
+  labs(x = "Average topic prevalence", y = NULL,
+       title = "What are the 10 most prevalent topics in each year?") +
+  theme(plot.title = element_text(size = 30))
+```
+
+We can also examine differences across decades. First let’s create a heatmap.
+
+```{r, fig.height= 14, fig.width=14}
+paper_topic_l %>% 
+  left_join(reading %>% select(id, decade)) %>% 
+  group_by(decade, topic) %>% 
+  summarize(prevalence = mean(prevalence)) %>% 
+  ungroup() %>% 
+  group_by(decade) %>% 
+  mutate(prevalence_normalized = prevalence/max(prevalence)) %>% 
+  ungroup() %>% 
+  select(-prevalence) %>% 
+  pivot_wider(values_from = prevalence_normalized,
+              names_from = topic) -> decade_topic 
+
+# convert to matrix
+decade_topic %>% 
+  # remove field variable
+  select(-decade) %>% 
+  # transpose the matrix
+  t() %>% 
+  # convert to matrix type
+  as.matrix() -> decade_topic_mat
+
+# change row names - topic labels
+rownames(decade_topic_mat) <- paste(model_100_sum$topic, model_100_sum$label_1)
+# change column names - field labels
+colnames(decade_topic_mat) <- decade_topic$decade
+
+# create heatmap
+heatmap(decade_topic_mat, 
+        # normalize column values 
+        scale = "column", 
+        # set size for row labels
+        cexRow = 0.7, 
+        # set size for column labels
+        cexCol = 1,
+        # set the color palette
+        col = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrBr"))(256))
+```
+Instead of one heatmap that includes all decades, we can also create a separate heatmap and dendrogram for each decade.
+
+```{r}
+heat_map_2 <- function(data, name = "") {
+  Heatmap(data, 
+          width = unit(0.5, "cm"), 
+          col = colorRamp2(c(min(data),max(data)), c("white", "#990011FF")),
+          row_names_gp = grid::gpar(fontsize = 7),
+          show_column_names = F,
+          heatmap_legend_param = list(title = ""),
+          column_title = name,
+          # show_heatmap_legend = F,
+          row_dend_width = unit(9, "cm")) 
+          }
+
+heat_map_by_decades <-apply(decade_topic_mat, 2, heat_map_2)
+```
+
+What does the topic distribution look like in the 2010s?
+
+```{r, fig.height= 25, fig.width=14}
+heat_map_by_decades$`2010s`
+```
+What about the 2020s?
+
+```{r, fig.height= 25, fig.width=14}
+heat_map_by_decades$`2020s`
+```
+## Differences across two major research streams
+
+Now let’s see how topic distribution differs between the two research streams of my comps.
+
+```{r, fig.height= 25, fig.width=14}
+paper_topic_l %>% 
+  left_join(reading %>% select(id, research_stream)) %>% 
+  group_by(research_stream, topic) %>% 
+  summarize(prevalence = mean(prevalence)) %>% 
+  ungroup() %>% 
+  group_by(research_stream) %>% 
+  mutate(prevalence_normalized = prevalence/max(prevalence)) %>% 
+  ungroup() %>% 
+  select(-prevalence) %>% 
+  pivot_wider(values_from = prevalence_normalized,
+              names_from = topic) -> theme_topic 
+
+# convert to matrix
+theme_topic %>% 
+  # remove field variable
+  select(-research_stream) %>% 
+  # transpose the matrix
+  t() %>% 
+  # convert to matrix type
+  as.matrix() -> theme_topic_mat
+
+# change row names - topic labels
+rownames(theme_topic_mat) <- paste(model_100_sum$topic, model_100_sum$label_1)
+# change column names - field labels
+colnames(theme_topic_mat) <- theme_topic$Topic
+```
+
+Let's start with the "Network and gender" stream!
+
+```{r, fig.height= 25, fig.width=14}
+heat_map_2(theme_topic_mat[,1], "Network and gender") 
+```
+
+```{r, fig.height= 25, fig.width=14}
+heat_map_2(theme_topic_mat[,2], "Novelty reception") 
+```
+
+Finally let’s also get the most prevalent topics in each theme.
+
+```{r}
+paper_topic_l %>%
+  # get research stream column from original data
+  left_join(reading %>% select(id, research_stream)) %>% 
+  # get average topic prevalence for each field
+  group_by(topic, research_stream) %>%
+  summarize(mp = mean(prevalence)) %>% 
+  ungroup() %>% 
+  group_by(research_stream) %>% 
+  slice_max(mp, n = 20) %>% 
+  ungroup() %>% 
+  mutate(topic = reorder_within(topic, mp, research_stream)) %>% 
+  ggplot(aes(topic, mp, fill = research_stream)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_x_reordered() +
+  scale_y_continuous(expand = c(0, 0)) +
+  facet_wrap(~research_stream, scales = "free") +
+  scale_fill_manual(values = c("#317773", "#E2D1F9")) +
+  labs(x = "Average topic prevalence", y = NULL,
+       title = "What are the 10 most prevalent topics in each research stream?") +
+  theme_minimal()
+```
+

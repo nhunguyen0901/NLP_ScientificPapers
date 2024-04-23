@@ -57,13 +57,11 @@ options(knitr.kable.NA = '',
 theme_set(theme_plex())
 ```
 
-Welcome to my journey as I prepare for my PhD comprehensive exam! In this notebook, I analyze over a hundred research papers that explore two critical questions: how new ideas gain acceptance and how social networks influence the careers of men and women differently. These research streams, which I refer to as "Novelty Reception" and "Network and Gender", form the bedrock of my work into the systemic barriers women face in creative fields.
-
-Since starting my PhD in 2019, I've used text analysis to help me with various aspects of my research, including gearing up for my comprehensive exams. This notebook documents that journey.
+Welcome to my journey as I prepare for my PhD comprehensive exam! Since starting my PhD in 2019, I've used text analysis to help me with various aspects of my research, including gearing up for comps. In this notebook, I analyze over a hundred research papers that explore two critical questions: how new ideas gain acceptance and how social networks influence the careers of men and women differently. These research streams, which I refer to as "Novelty Reception" and "Network and Gender", form the bedrock of my work into the systemic barriers women face in creative fields.
 
 We start by extacting detailed metadata for each paper from their academic citations. Then, we delve into the textual content of the abstracts, using NLP tools like TF-IDF and weighted log odds to unearth key terms and phrases unique to each research stream. We also create visualizations to further clarify the thematic trends we uncover. 
 
-Join me on this adventure as we transform raw academic text into a comprehensive exploration of thematic trends in the research on the forces shaping acceptance of new ideas and the gendered effects of social networks.
+Join me on this journey as we explore the thematic trends in the research on the forces shaping acceptance of new ideas and the gendered effects of social networks.
 
 
 # Generating metadata from citations
@@ -207,6 +205,8 @@ reading %>%
   relocate(where(is.numeric), .before = where(is.character)) %>% 
   relocate(paper_title, .after = id) %>% 
   janitor::clean_names() -> reading
+
+saveRDS(reading, "reading.rds")
 ```
 
 Let’s take a look at our new dataset now. 
@@ -245,8 +245,6 @@ reading %>%
   # theme(plot.title = element_text(size=15))
 ```
 
-The graphs show that most of my readings are empirical papers, whereas theoretical papers are quite rare. This makes sense since I am more interested in data and empirics than theory and this influences how I choose papers to read for my research. 
-
 From the charts, it's clear most of my readings are empirical papers, while review and theoretical papers are fewer. This makes sense given my focus on data-driven research. 
 
 Next, let’s examine the diversity of publication venues, sorted by fields within each research stream. This will help us understand where most research in my reading list is being published.
@@ -276,7 +274,7 @@ reading %>%
   theme(plot.title = element_text(size = 15))
 ```
 
-It turns out a significant number of papers come from management journalswhich makes sense since I'm doing a PhD in management. Two other types of journals that I also read quite a lot is sociology and psychology journals, although sociology papers here are mostly about network and gender, whereas psychology papers are mostly about novelty reception. 
+It turns out a significant number of papers come from management journals, which makes sense since I'm doing a PhD in management. Two other types of journals that I also read quite a lot is sociology and psychology journals, although sociology papers here are mostly about network and gender, whereas psychology papers are mostly about novelty reception. 
 
 What about the number of papers across time? 
 
