@@ -25,5 +25,5 @@ To fully engage with the findings, please open the `.html` files in a web browse
 ## Replicability 
 
 - Open Data: The dataset analyzed can be accessed through a Google Sheets link provided in the first notebook. Thus, anyone can replicate the study by simply running the provided code.
-- Pre-trained Models: To save you time and computational resources, I've included the model trained in the second notebook to enable immediate further analysis and exploration.
+- Pre-trained Models: To save you time and computational resources, I've included the models trained in the second notebook as well.
 
