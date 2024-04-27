@@ -11,22 +11,26 @@ execute:
   cache: true
 ---
 
-Welcome to the next phase of my journey to prepare for my comprehensive exams! Here, we delve deeper into the world of Natural Language Processing (NLP) to unearth the thematic foundations of the research papers on my reading list. Having previously refined and analyzed the abstracts of over a hundred papers using TF-IDF and weighted log odds, our focus now shifts to topic modeling-a powerful NLP technique that detects patterns and themes across vast text collections.
+Welcome to the next phase of my journey preparing for my PhD comprehensive exams! Here, we delve deeper into the world of Natural Language Processing (NLP) to unearth the hidden themes within the 100+ research papers on my reading list. Previously, we've analyzed these papers' abstracts using TF-IDF and weighted log odds. Now, we'll explore topic modeling—a great method to detect patterns and themes across these vast collections of text.
 
-Here's our roadmap for our exploration:
+**What is Topic Modeling?**
+
+Imagine entering a bustling cafe where every table buzzes with a different conversation. Topic modeling is somewhat like having a superpower that lets you instantly understand the gist of every conversation in the room. It groups words that often appear together into themes or topics. Each topic is a mixture of words, and each document (or abstract, in our case) is a mixture of topics. This way, instead of poring over every paper, we can quickly grasp the major discussions in a field.
+
+**Here's our exploration roadmap:**
 
 1.  Preparation for Topic Modeling: We begin by transforming our cleaned text data from a tidy format, where each word is isolated in its own row, back to a wide format where each document is represented in a single row. This preparation is crucial for topic modeling.
 2.  Creating a Document-Term Matrix (DTM): We convert the wide-format text data into a document-term matrix. This matrix serves as the input for our topic modeling, enabling the detection of textual patterns.
-3.  Training Topic Models: Using Latent Dirichlet Allocation (LDA), we train a series of topic models, experimenting with topics ranging from 5 to 130. Our objective is to identify the model that most accurately captures the core themes, assessed by their topic coherence.
+3.  Training Topic Models: Using Latent Dirichlet Allocation (LDA), we train a series of topic models, experimenting with topics ranging from 10 to 130. Our objective is to identify the model that most accurately captures the core themes, assessed by their topic coherence.
 4.  Evaluating Models: We evaluate the semantic coherence of each model and use visualizations to determine the most effective model.
 5.  Analyzing Topic Model Results: Once we select our model, we delve into the topics it uncovered. We examine the prevalence and coherence of each topic and employ visualizations to show the most dominant topics and their pivotal terms.
 6.  Detecting Communities of Topics: Lastly, we explore how topics relate to each other using a dendrogram, which visually represents how topics cluster based on their co-occurrence in documents. This helps us understand which topics commonly intersect, shedding light on their relationships.
 
-Join me as we transform academic text into a structured exploration of academic discourse across over 100 papers in my reading list.
+Join me as we transform academic text into a structured exploration of academic discourse across 100+ papers!
 
 # Creating input for modeling
 
-First, we read the data on we created in the last notebook, with info on the papers and their metadata (authors, publication year, etc.). Then, we transform the abstract texts into a tidy format, clean them up by removing common stop words and numbers, and ensure consistency by converting plural nouns into their singular forms. Next, these texts are transformed back into the wide format (i.e., one document per row).
+First things first, let's load the data we created in the last notebook. This dataset includes hundreds of abstracts from academic papers, with each row representing a single paper's abstract along with its metadata, such as the title, authors, publication year, and the journal it appeared in.
 
 ```{r setup}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
@@ -34,32 +38,43 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 
 ```{r}
 library(dplyr) # manipulate data
-library(tidyr)
+library(tidyr) # tidy data
 library(ggplot2) # visualize data
 library(kableExtra) # create pretty table
-library(textmineR) # run topic model
-library(tidytext)
-library(stringr)
-library(purrr)
-library(furrr)
-library(dendextend) # create dendrogram
-library(ComplexHeatmap) # ceate heatmap
-library(circlize)
+library(textmineR) # perform topic modeling
+library(tidytext) # text mining tasks specific to tidy data
+library(stringr) # string operations
+library(purrr) # functional programming tools
+library(furrr) # parallel processing using purrr
+library(dendextend) # create and manipulate dendrogram objects
+library(ComplexHeatmap) # create complex heatmaps
+library(circlize) # circular visualization
+
+# Setup parallel processing to speed up computationally intensive tasks
 plan(multisession)
 ```
 
 ```{r}
+# Load the dataset created in previous notebook on paper abstract and paper metadata
 reading <- readRDS("reading.rds")
 
+# Preview the first 2 entries of the dataset 
 reading %>% head(2) %>% kable()
+```
 
+Currently, each paper is just a number in our dataset. Let's give them names that resonate more closely with their identity by combining the first author's name and the publication year. It's like assigning a more memorable name tag to each guest at our text analytics party!
+
+```{r}
+# Prepare the data by creating a unique identifier for each document using the original author name column
 reading %>%
   mutate(id = str_replace(first_author, ", ", "_")) %>% 
   select(-first_author) -> reading
 ```
 
+With our data neatly labeled, let's dive into text processing. Here’s what we do: - Break down each abstract into its fundamental building blocks—individual words. - Clean up these words by removing common stop words and numbers that don’t add much meaning. - Standardize words to their root forms, turning plurals into singulars. This way, variations like "results" and "result" are treated as one. - Reassemble our abstracts into the wide format (i.e., one document per row).
+
 ```{r}
-# Preparing the abstracts for text analysis by tokenizing the text and cleaning it.
+# Preparing the abstracts for topic modeling 
 reading_unnest <- reading %>%
   # Selecting only the ID and abstract text columns for analysis
   select(id, abstract) %>% 
@@ -94,10 +109,11 @@ reading_unnest <- reading %>%
         # remove input column
         remove = T)  -> reading_input
 
+# Display the processed input data for topic modeling
 reading_input %>% head(5) %>% kable()
 ```
 
-Once we have our text in a one-document-per-row format, we next convert this into a document-term matrix, which will serve as the input for our topic models.
+Once our abstracts are prepared, we transform them into a document-term matrix, which serves as input for our topic modeling.
 
 ```{r, eval=F}
 # create document-term matrix as input for topic model
@@ -109,32 +125,39 @@ CreateDtm(doc_vec = reading_input$abstract_ns,
 
 # Training and evaluating topic models
 
-Now we can start training our topic models `r emo::ji("hooray")` `r emo::ji("hooray")`. We need to train a series of models with different numbers of topics and then choose one with highest topic coherence. Here, we try 13 number of topics from 10 to 130.
+Now we can start training our topic models `r emo::ji("hooray")` `r emo::ji("hooray")`. We experiment with different numbers of topics, from 10 to 130. It's like tuning a radio; we're trying to find the right frequency that brings out the clearest signal or, in our case, the clearest themes.
 
 ```{r, eval=F}
-readRDS("many_models_lda.rds") -> many_models_lda
-# run topic models with k from 10 to 130
+# Train multiple LDA models with varying numbers of topics (from 10 to 130)
 many_models_lda <- tibble(K = c(10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130)) %>%
   mutate(topic_model = future_map(K, ~ FitLdaModel(dtm = reading_dtm, k = ., iterations = 5000))) %>% 
   arrange(K) %>% 
   # calculate semantic coherence
   mutate(semantic_coherence = map_dbl(topic_model, function(x) mean(x$coherence)))
 
+# Save the trained models to an RDS file
 saveRDS(many_models_lda, "many_models_lda.rds")
 ```
 
-Next, we calculate the average topic coherence for each of our 126 models and create a line graph to see how topic coherence changes across a range of topic numbers.
+One way to find the "best" model (I use quotation marks because there are no hard and fast rules for choosing a model, it depends on your purpose), but one way is through semantic coherence, a measure how logically connected the words in a topic are. It helps us determine if a topic really makes sense or if it just throws together a bunch of unrelated words. `TextmineR` uses a special method called probabilistic coherence, with the following steps: - `TextmineR` first looks at the probability that if one word (say, "athlete") appears in a document, another related word (say, "sports") also appears. - It then compares this contextual probability to the general probability of finding the second word ("sports") in any document, regardless of the presence of the first word ("athlete"). The intuition here is that if the first word significantly increases the likelihood of the second word's presence more than its general occurrence across all documents, then the two words have a meaningful connection specific to that topic. If "sports" generally appears often across all documents, but its presence is not notably increased by the presence of "athlete," then perhaps their pairing isn't as significant as it initially seemed. - `TextmineR` assesses overall topic coherence by calculating such differences for all pairs of top words in a topic and averaging them. A higher average indicates that words in a topic significantly enhance the presence of each other, reflecting a well-connected, meaningful topic.
+
+The essence of TextmineR's semantic coherence measure lies in determining not just the co-occurrence but the meaningful enhancement of word presence by other words within a topic.
+
+Ok, let's calculate the average topic coherence for each of our models and create a line graph to see how topic coherence changes across a range of topic numbers. This graph helps us see which model does the best job at grouping words into meaningful topics.
 
 ```{r, eval=F}
-# graph coherence 
+readRDS("many_models_lda.rds") -> many_models_lda
+# Visualize the semantic coherence of each model to identify the optimal number of topics
 many_models_lda %>% 
   ggplot(aes(K, semantic_coherence)) +
   geom_line(size = 1.5,
             color = "#be1558") +
   labs(x = "K (number of topics)",
        y = "Average Coherence of Topics",
-       title = "Semantic coherence by number of topics") 
+       title = "Semantic coherence by number of topics") +
+  theme_minimal() +  # Use a minimal theme as a base
 
+# Remove the series of topic models trained from memory to free up space
 rm(many_models_lda)
 ```
 
@@ -145,6 +168,7 @@ knitr::include_graphics("sem_coh.png")
 It seems that 100 topics give us the model with highest semantic coherence. Let's get the results of that model and see what it gives us!
 
 ```{r, eval = F}
+# Retrieve the model with the highest semantic coherence
 many_models_lda %>% 
   slice_max(semantic_coherence) %>% 
   pull(K) -> k
@@ -155,23 +179,30 @@ model_100 <- many_models_lda %>%
   pull(topic_model) %>% 
   .[[1]]
 
+# Save the best performing model to an RDS file
 saveRDS(model_100, "model_100.rds")
 rm(many_models_lda)
 ```
 
 # Analyzing topic model results
 
-As a first step to understanding LDA results, let's get a summary table describing the topics LDA discovers.
+As a first step to understanding LDA results, let's get a summary table describing the topics LDA discovers. The `SummarizeTopics()` gives us the following metrics about each topic:
+
+-   `label` offers a quick tag or name for the topic, derived from its most defining terms.
+-   `prevalence` is a measure of popularity. It tells us how often a topic shows up in our dataset. If our dataset were a dinner party, a high prevalence means a topic is a common guest at many tables; it’s something that captures the interest or concern of many researchers.
+-   `coherence` measures how much sense a topic makes. It's about clarity and connection. When a topic has high coherence, it means the words that make up this topic aren't just random words thrown together; they share a meaningful relationship, making the topic understandable and insightful.
+-   `top_terms_phi` and `top_terms_gamma` give us a peek into the key words that define each topic. While both relate to terms important to the topic, they come from slightly different angles:
+    -   `top_terms_phi` points to the most common words within the topic. These are like the common themes or general knowledge that everyone in this topic area talks about—they’re familiar and frequently used.
+    -   `top_terms_gamma`, on the other hand, shows the words most exclusive to the topic—these words are rare or unique in other discussions but common in this one, like the signature of the topic.
 
 ```{r}
 model_100 <- readRDS("model_100.rds")
 # create summary of topics
 SummarizeTopics(model_100)  -> model_100_sum
 
-model_100_sum %>%
-  arrange(-prevalence) %>% 
-  kbl(caption = "Summary of 100 topics", col.names = NULL) %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), fixed_thead = T) %>%
+model_100_sum %>% 
+  kbl(caption = "Summary of 100 topics", col.names = NULL) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), fixed_thead = T) %>% 
   add_header_above(c("ID","topic","% of discourse","coherence","central terms \n high pr(term | topic)","specific terms \n high pr(topic | term)")) %>% 
   scroll_box(width = "100%", height = "700px")
 ```
@@ -418,8 +449,6 @@ pivot_longer(paper_topic,
     TRUE ~ topic)) -> paper_topic_l
 ```
 
-
-
 ```{r}
 paper_topic_l %>%
   # get field column from original data
@@ -448,7 +477,6 @@ rownames(field_topic_mat) <- paste(model_100_sum$topic, model_100_sum$label_1)
 colnames(field_topic_mat) <- field_topic$field
 ```
 
-
 ```{r, fig.height= 14, fig.width=14}
 # create heatmap
 heatmap(field_topic_mat, 
@@ -461,7 +489,6 @@ heatmap(field_topic_mat,
         # set the color palette
         col = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrBr"))(256))
 ```
-
 
 This heatmap are quite hard to see because we have many topics. Let’s filter out the 10 most prevalent topics in each field.
 
@@ -530,6 +557,7 @@ heatmap(year_topic_mat,
         # set the color palette
         col = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrBr"))(256))
 ```
+
 Next, we can get the 20 most prevalent topics in each year.
 
 ```{r, fig.height= 25, fig.width=14}
@@ -595,6 +623,7 @@ heatmap(decade_topic_mat,
         # set the color palette
         col = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrBr"))(256))
 ```
+
 Instead of one heatmap that includes all decades, we can also create a separate heatmap and dendrogram for each decade.
 
 ```{r}
@@ -618,11 +647,13 @@ What does the topic distribution look like in the 2010s?
 ```{r, fig.height= 25, fig.width=14}
 heat_map_by_decades$`2010s`
 ```
+
 What about the 2020s?
 
 ```{r, fig.height= 25, fig.width=14}
 heat_map_by_decades$`2020s`
 ```
+
 ## Differences across two major research streams
 
 Now let’s see how topic distribution differs between the two research streams of my comps.
@@ -690,4 +721,3 @@ paper_topic_l %>%
        title = "What are the 10 most prevalent topics in each research stream?") +
   theme_minimal()
 ```
-
